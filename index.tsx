@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// GameActivitySpoofer 0.2.0 — Vencord / Equicord user plugin.
+// GameActivitySpoofer 0.2.1 — Vencord / Equicord user plugin.
 
 import { definePluginSettings } from "@api/Settings";
 import ErrorBoundary from "@components/ErrorBoundary";
@@ -259,6 +259,11 @@ function Panel() {
                 <strong>{active ? `Active: ${state!.game}` : "Session stopped"}</strong>
                 <p role="status" style={{ marginTop: 5 }}>{initError || state?.message || "Enable this plugin to start."}</p>
                 {state && <p style={{ marginTop: 5 }}>Session time: {duration(state.elapsedMs)}</p>}
+                {state && state.recording !== "idle" && <p role="status" style={{ marginTop: 5 }}>
+                    {state.recording === "pending" ? "Activity recording: waiting for Discord…"
+                        : state.recording === "accepted" ? "Activity recording: accepted by Discord. Recent Activity and badge updates may take time."
+                            : "Activity recording: Discord rejected the update. Playing status may still appear, but history and badge credit are unconfirmed."}
+                </p>}
                 {active && state!.total > 1 && <p>Queue {state!.index}/{state!.total} · Next game in {duration(state!.nextInMs ?? 0)}</p>}
                 <BadgeProgressPanel />
             </div>
@@ -341,6 +346,9 @@ export default definePlugin({
     },
     stop() { enabled = false; badgeReader.reset(); closeModal(gameMenuKey); session?.stop("Plugin disabled. Normal game detection restored."); notify(); },
     flux: {
+        ACTIVITY_UPDATE_START({ applicationId }: { applicationId: string; }) { session?.activityUpdate(applicationId, "pending"); },
+        ACTIVITY_UPDATE_SUCCESS({ applicationId }: { applicationId: string; }) { session?.activityUpdate(applicationId, "accepted"); },
+        ACTIVITY_UPDATE_FAIL({ applicationId }: { applicationId: string; }) { session?.activityUpdate(applicationId, "failed"); },
         LOGOUT() { badgeReader.reset(); session?.stop("Signed out. Session stopped."); },
         CONNECTION_CLOSED() { badgeReader.reset(); session?.stop("Disconnected. Start a new session after reconnecting."); }
     },

@@ -14,7 +14,7 @@ export interface RunningGame {
     name: string;
     exePath: string;
     cmdLine: string;
-    distributor: string;
+    distributor: string | null;
     lastFocused: number;
     lastLaunched: number;
     nativeProcessObserverId: number;
@@ -54,6 +54,7 @@ export interface Snapshot {
     elapsedMs: number;
     nextInMs: number | null;
     message: string;
+    recording: "idle" | "pending" | "accepted" | "failed";
 }
 interface Host {
     now(): number;
@@ -122,7 +123,9 @@ function makeGame(game: CatalogGame, platform: Platform, pid: number, now: numbe
             : `/opt/games/${name}/${exe}`;
     return {
         id: game.id, name: game.name, exeName: exe, exePath: path,
-        cmdLine: `"${path}"`, processName: game.name, distributor: "",
+        // Discord's activity recorder forwards this field to the server.
+        // An unknown distributor is null, not an invalid empty enum value.
+        cmdLine: `"${path}"`, processName: game.name, distributor: null,
         pid, pidPath: [pid], nativeProcessObserverId: pid,
         start: now, lastFocused: now, lastLaunched: now,
         hidden: false, isLauncher: false, elevated: false, sandboxed: false
@@ -146,6 +149,8 @@ export class GameSession {
     private elapsed = 0;
     private nextPid = 2_000_000_000;
     private message = "Ready. Choose games, then start a session.";
+    private recording: Snapshot["recording"] = "idle";
+    private recordingGameId: string | undefined;
 
     constructor(private store: GameStore, private host: Host) {
         for (const method of ["getRunningGames", "getGameForPID", "getCurrentGameForAnalytics"] as const) {
@@ -166,7 +171,8 @@ export class GameSession {
             elapsedMs: this.current ? Math.max(0, now - this.began) : this.elapsed,
             nextInMs: this.current && this.options && this.options.games.length > 1
                 ? Math.max(0, this.options.minutesPerGame * 60_000 - (now - this.gameBegan)) : null,
-            message: this.message
+            message: this.message,
+            recording: this.recording
         };
     }
 
@@ -206,6 +212,14 @@ export class GameSession {
         } catch (error) {
             this.stop(`Session stopped: ${error instanceof Error ? error.message : "game selection failed"}`);
         }
+    }
+
+    activityUpdate(applicationId: string, result: "pending" | "accepted" | "failed"): void {
+        // Observe only the selected game's normal client recording events.
+        // No activity tokens or other request contents are retained here.
+        if (applicationId !== this.recordingGameId) return;
+        this.recording = result;
+        this.host.changed();
     }
 
     stop(message = "Stopped. Normal game detection restored."): void {
@@ -249,6 +263,8 @@ export class GameSession {
         if (this.store.isDetectionEnabled?.(game) === false)
             throw new Error(`Detection is disabled for ${game.name}. Enable it in Registered Games first.`);
         this.current = game;
+        this.recordingGameId = game.id;
+        this.recording = "pending";
         this.ownedPids.add(game.pid!);
         this.gameBegan = now;
         this.message = "Simulating detected activity. Discord badge credit is unverified.";

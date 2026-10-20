@@ -9,6 +9,7 @@ A custom Vencord desktop plugin for selecting and simulating detected game activ
 - Open the game controls from the gamepad button in Discord's top-right toolbar.
 - Set a rotation interval and optional session time limit.
 - View Discord-reported Game Time and Game Variety badge tiers, progress bars, and remaining requirements.
+- See whether Discord accepts or rejects the session's activity recording updates.
 - Move to the next game or stop the session from the menu.
 - Restore normal game detection when a session stops.
 
@@ -43,6 +44,16 @@ See also the [Vencord custom plugin guide](https://docs.vencord.dev/installing/c
 Open the gamepad button in the top-right toolbar, or open the plugin's settings. Click **Load game catalog**, search for a game, select it, and click **Start session**.
 
 Select multiple games to rotate through them in selection order. Use **Next game** to advance, or **Stop session** before changing your selection. Closing the menu keeps the session running.
+
+## Activity recording
+
+The plugin sends normal running-game changes to Discord's own activity recorder. Unknown game distributors use `null`, matching the desktop client's format, so activity recording is not rejected because of an empty distributor value.
+
+The session panel shows whether a recording update is pending, accepted, or rejected. An accepted update confirms Discord received that update; it does not guarantee a Recent Activity entry or badge credit. Stop the session to let the client submit its final elapsed duration. History and badge updates may take time.
+
+The plugin does not backdate sessions, submit invented playtime, or replace the profile's history with local entries.
+
+On October 20, 2026, a desktop test with A Short Hike ran for 5 minutes 22 seconds. Discord accepted the starting and final recording updates, and the game appeared in Recent Activity after stopping the session and reloading Discord. Badge credit was not established by this test. Other client versions, games, and account settings may behave differently.
 
 ## Badge progress
 
