@@ -50,9 +50,6 @@ Artwork comes from Discord's catalog and CDN. Covers are preferred; unavailable 
 
 Game Time / Game Variety badge credit is unverified. The plugin cannot unlock a badge rollout or fast-forward hours. It stops on logout, disconnect, plugin disable, or a long sleep/suspension; starting again is manual.
 
-## Validation
-
-The current source passed `pnpm build` and `pnpm testTsc` in the local Vencord checkout. Cover metadata was checked against Discord's live detectable game catalog and an artwork URL returned an image successfully. This is a build check, not a guarantee of compatibility with future Discord versions.
 
 ## License
 
