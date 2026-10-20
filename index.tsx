@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// GameActivitySpoofer 0.1.0 — Vencord / Equicord user plugin.
+// GameActivitySpoofer 0.2.0 — Vencord / Equicord user plugin.
 
 import { definePluginSettings } from "@api/Settings";
 import ErrorBoundary from "@components/ErrorBoundary";
 import definePlugin from "@utils/types";
 import { findComponentByCodeLazy } from "@webpack";
-import { closeModal, FluxDispatcher, Modal, openModal, React, RestAPI, RunningGameStore } from "@webpack/common";
+import { closeModal, FluxDispatcher, Modal, openModal, React, RestAPI, RunningGameStore, UserStore } from "@webpack/common";
 
+import { BadgeProgressReader } from "./badges";
 import { CatalogGame, fetchCatalog, GameSession, GameStore, Platform } from "./core";
 
 const settings = definePluginSettings({}).withPrivateSettings<{
@@ -22,6 +23,12 @@ let catalog: CatalogGame[] | undefined;
 let catalogRequest: Promise<CatalogGame[]> | undefined;
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach(fn => fn());
+const badgeReader = new BadgeProgressReader({
+    getAccountId: () => enabled ? UserStore.getCurrentUser()?.id : undefined,
+    get: url => RestAPI.get({ url, retries: 0 }),
+    now: Date.now,
+    changed: notify
+});
 
 const HeaderBarIcon = findComponentByCodeLazy(".HEADER_BAR_BADGE_BOTTOM,", 'position:"bottom"');
 const gameMenuKey = "vc-game-activity-spoofer-menu";
@@ -77,8 +84,7 @@ async function loadCatalog(): Promise<CatalogGame[]> {
     if (catalogRequest) return catalogRequest;
     catalogRequest = (async () => {
         try {
-            // Read Discord's own catalog. No external service or token
-            // extraction, and no custom progress/heartbeat/reward API calls.
+            // Read Discord's own catalog using the normal client API.
             const parsed = await fetchCatalog(url => RestAPI.get({ url, retries: 0 }), platform());
             catalog = parsed;
             return parsed;
@@ -127,6 +133,67 @@ function GameArtwork({ game }: { game: CatalogGame; }) {
                 onError={() => setFailedUrls(previous => new Set([...previous, imageUrl]))}
             /> : <GamepadIcon />}
         </span>
+    );
+}
+
+function BadgeProgressPanel() {
+    const [, refresh] = React.useReducer(n => n + 1, 0);
+    const [now, setNow] = React.useState(Date.now);
+    React.useEffect(() => {
+        listeners.add(refresh);
+        void badgeReader.refresh();
+        const timer = setInterval(() => {
+            setNow(Date.now());
+            void badgeReader.refresh();
+        }, 1000);
+        return () => { clearInterval(timer); listeners.delete(refresh); };
+    }, []);
+    const snapshot = badgeReader.snapshot;
+    const cooldown = Math.max(0, Math.ceil((snapshot.nextRequestAt - now) / 1000));
+    return (
+        <div style={{ display: "grid", gap: 10, marginTop: 12 }} aria-label="Discord badge progress">
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <strong>Badge progress</strong>
+                <button type="button" style={{ ...buttonStyle, padding: "5px 9px" }}
+                    disabled={!enabled || snapshot.loading || cooldown > 0}
+                    onClick={() => void badgeReader.refresh(true)}>
+                    {snapshot.loading ? "Refreshing…" : cooldown > 0 ? `Refresh in ${cooldown}s` : "Refresh progress"}
+                </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+                {snapshot.entries.map(entry => {
+                    const data = entry.data;
+                    const percent = data?.percent;
+                    return (
+                        <div key={entry.id} style={{ padding: 12, borderRadius: 6, background: "var(--background-tertiary, #1e1f22)", display: "grid", alignContent: "start", gap: 6 }}>
+                            <strong>{entry.name}</strong>
+                            {data ? <>
+                                <span>{data.tier}{data.maxed ? " · Maximum tier" : data.nextTier ? ` → ${data.nextTier}` : ""}</span>
+                                {percent !== undefined && <>
+                                    <div role="progressbar" aria-label={`${entry.name} progress to next tier`}
+                                        aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}
+                                        style={{ height: 8, borderRadius: 4, overflow: "hidden", background: "var(--background-modifier-accent, #48494e)" }}>
+                                        <div style={{ height: "100%", width: `${percent}%`, background: "#5865f2" }} />
+                                    </div>
+                                    <span>{data.maxed ? "Complete" : `${percent.toFixed(1)}% toward next tier`}</span>
+                                </>}
+                                {data.helperText && <p>{data.helperText}</p>}
+                                {percent === undefined && !data.helperText && <p>Discord did not provide a progress counter.</p>}
+                                {entry.updatedAt !== undefined && <small style={{ color: "var(--text-muted, #b5bac1)" }}>Last checked: {new Date(entry.updatedAt).toLocaleTimeString()}</small>}
+                            </> : <p>{!enabled ? "Enable the plugin to load progress." : snapshot.loading ? "Loading Discord progress…" : "Progress unavailable"}</p>}
+                            {entry.error && <p role="status" style={{ color: "var(--text-warning, #f0b232)" }}>
+                                {data ? "Showing the last successful update. " : ""}{entry.error}
+                            </p>}
+                        </div>
+                    );
+                })}
+            </div>
+            <small style={{ color: "var(--text-muted, #b5bac1)" }}>
+                {snapshot.automaticRefreshPaused
+                    ? "Automatic refresh is paused after an error. Use Refresh progress to try again."
+                    : "Read from Discord and checked once a minute while this menu is open. Discord may update counters later than the session timer."}
+            </small>
+        </div>
     );
 }
 
@@ -184,15 +251,16 @@ function Panel() {
                 <h2 style={{ fontSize: 20, marginBottom: 6 }}>Game Activity Spoofer</h2>
                 <p>Simulate a detected game, or rotate through a queue for Game Time / Game Variety experiments.</p>
                 <p style={{ color: "var(--text-muted, #b5bac1)", marginTop: 6 }}>
-                    Actual badge credit is unverified. This cannot unlock the badge rollout or fast-forward hours.
+                    Badge progress below is reported by Discord. Session time does not guarantee badge credit.
                     Your normal activity-sharing and data settings still apply.
                 </p>
             </div>
             <div style={{ padding: 14, borderRadius: 8, background: "var(--background-secondary, #2b2d31)", borderLeft: `4px solid ${active ? "#43b581" : "#80848e"}` }}>
                 <strong>{active ? `Active: ${state!.game}` : "Session stopped"}</strong>
                 <p role="status" style={{ marginTop: 5 }}>{initError || state?.message || "Enable this plugin to start."}</p>
-                {state && <p style={{ marginTop: 5 }}>Session time: {duration(state.elapsedMs)} · Badge progress: unverified</p>}
+                {state && <p style={{ marginTop: 5 }}>Session time: {duration(state.elapsedMs)}</p>}
                 {active && state!.total > 1 && <p>Queue {state!.index}/{state!.total} · Next game in {duration(state!.nextInMs ?? 0)}</p>}
+                <BadgeProgressPanel />
             </div>
             {error && <p role="alert" style={{ color: "var(--text-danger, #fa777c)" }}>{error}</p>}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -235,7 +303,7 @@ function Panel() {
 
 export default definePlugin({
     name: "GameActivitySpoofer",
-    description: "Simulate detected game activity with a selectable queue. Game Time / Game Variety badge credit is unverified.",
+    description: "Simulate detected game activity with a selectable queue and view Discord-reported Game Time / Game Variety badge progress.",
     authors: [{ name: "Plugin author", id: 450897104626384907n }],
     settings,
     settingsAboutComponent: Panel,
@@ -271,10 +339,10 @@ export default definePlugin({
         } catch (err) { initError = err instanceof Error ? err.message : "Discord compatibility check failed."; }
         notify();
     },
-    stop() { enabled = false; closeModal(gameMenuKey); session?.stop("Plugin disabled. Normal game detection restored."); notify(); },
+    stop() { enabled = false; badgeReader.reset(); closeModal(gameMenuKey); session?.stop("Plugin disabled. Normal game detection restored."); notify(); },
     flux: {
-        LOGOUT() { session?.stop("Signed out. Session stopped."); },
-        CONNECTION_CLOSED() { session?.stop("Disconnected. Start a new session after reconnecting."); }
+        LOGOUT() { badgeReader.reset(); session?.stop("Signed out. Session stopped."); },
+        CONNECTION_CLOSED() { badgeReader.reset(); session?.stop("Disconnected. Start a new session after reconnecting."); }
     },
     toolboxActions: { "Open game activity menu": openGameMenu, "Stop game activity spoofing": () => session?.stop() }
 });
