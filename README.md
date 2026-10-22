@@ -10,7 +10,6 @@ A custom Vencord desktop plugin for selecting and simulating detected game activ
 - Set a rotation interval and optional session time limit.
 - View Discord-reported Game Time and Game Variety badge tiers, progress bars, and remaining requirements.
 - See whether Discord accepts or rejects the session's activity recording updates.
-- Run an experimental shared-streak request with a chosen number and compare the actual server history before and after.
 - Move to the next game or stop the session from the menu.
 - Restore normal game detection when a session stops.
 
@@ -21,13 +20,12 @@ This plugin is installed from source as part of a custom Vencord build. It requi
 1. Set up a Vencord source checkout following the [Vencord installation guide](https://docs.vencord.dev/installing/).
 2. Download this repository's ZIP from **Code → Download ZIP**.
 3. Create `src/userplugins/gameActivitySpoofer` inside your Vencord checkout.
-4. Copy `index.tsx`, `core.ts`, `badges.ts`, and `streakTest.ts` into that folder. The resulting paths must be:
+4. Copy `index.tsx`, `core.ts`, and `badges.ts` into that folder. The resulting paths must be:
 
    ```text
    src/userplugins/gameActivitySpoofer/index.tsx
    src/userplugins/gameActivitySpoofer/core.ts
    src/userplugins/gameActivitySpoofer/badges.ts
-   src/userplugins/gameActivitySpoofer/streakTest.ts
    ```
 
 5. From your Vencord checkout, run:
@@ -47,14 +45,6 @@ Open the gamepad button in the top-right toolbar, or open the plugin's settings.
 
 Select multiple games to rotate through them in selection order. Use **Next game** to advance, or **Stop session** before changing your selection. Closing the menu keeps the session running.
 
-
-## Experimental shared streak test
-
-Load the catalog, select a game, and stop any running spoof session. Expand **Experimental shared streak test**, enter the requested streak number, and click **Run shared streak test**. The test uses the first selected game.
-
-This creates a brief recorded activity session with the requested streak fields, closes it using the actual elapsed duration, and reads Discord's history before and afterward. The result reports the actual server values. An accepted request does not mean Discord honored the requested streak. In the October 22, 2026 test, requesting 99 days changed the server history from 4 days to 5 days, rather than 99.
-
-Tests are manual, with a minimum one-minute cooldown and longer waits when Discord reports a rate limit. A normal spoof session cannot start while a test is running. Results are cleared on logout, disconnect, or plugin disable; session tokens are never displayed or retained in the result.
 
 ## Badge progress
 
