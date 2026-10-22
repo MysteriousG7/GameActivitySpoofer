@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// GameActivitySpoofer 0.2.1 — Vencord / Equicord user plugin.
+// GameActivitySpoofer 0.2.2 — Vencord / Equicord user plugin.
 
 import { definePluginSettings } from "@api/Settings";
 import ErrorBoundary from "@components/ErrorBoundary";
@@ -9,6 +9,7 @@ import { closeModal, FluxDispatcher, Modal, openModal, React, RestAPI, RunningGa
 
 import { BadgeProgressReader } from "./badges";
 import { CatalogGame, fetchCatalog, GameSession, GameStore, Platform } from "./core";
+import { runSharedStreakTest } from "./streakTest";
 
 const settings = definePluginSettings({}).withPrivateSettings<{
     gameIds?: string[];
@@ -23,6 +24,63 @@ let catalog: CatalogGame[] | undefined;
 let catalogRequest: Promise<CatalogGame[]> | undefined;
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach(fn => fn());
+let streakTestBusy = false;
+let streakTestNextAt = 0;
+let streakTestResult = "";
+let streakTestRevision = 0;
+function resetStreakTest() { streakTestRevision++; streakTestResult = ""; }
+
+async function testSharedStreak(game: CatalogGame, requested: number) {
+    if (!enabled || streakTestBusy || session?.snapshot.active || Date.now() < streakTestNextAt) return;
+    if (!Number.isSafeInteger(requested) || requested < 1 || requested > 1000000) {
+        streakTestResult = "Enter a whole streak number between 1 and 1000000."; notify(); return;
+    }
+    const revision = ++streakTestRevision;
+    streakTestBusy = true;
+    streakTestNextAt = Date.now() + 60000;
+    streakTestResult = `Testing ${game.name}…`; notify();
+    try {
+        const result = await runSharedStreakTest(game, requested, {
+            accountId: () => UserStore.getCurrentUser()?.id,
+            get: url => RestAPI.get({ url, retries: 0 }),
+            post: body => RestAPI.post({ url: "/activities", body, retries: 0 }),
+            now: Date.now,
+            sleep: ms => new Promise(resolve => setTimeout(resolve, ms))
+        });
+        if (revision !== streakTestRevision) return;
+        const format = (values: (number | null)[]) => values.length ? values.map(n => n ?? "no streak tag").join(", ") : "no matching entry";
+        streakTestResult = `${result.game}: requested ${result.requested}. Discord history before: ${format(result.before)}; after: ${format(result.after)}. Activity requests accepted; this does not confirm that Discord honored the requested streak.`;
+    } catch (error) {
+        const e = error as { status?: number; statusCode?: number; body?: { retry_after?: number; }; message?: string; };
+        if (Number.isFinite(e?.body?.retry_after) && e.body!.retry_after! > 0)
+            streakTestNextAt = Math.max(streakTestNextAt, Date.now() + e.body!.retry_after! * 1000);
+        if (revision !== streakTestRevision) return;
+        const status = e?.status ?? e?.statusCode;
+        streakTestResult = status ? `Test failed (HTTP ${status}).${status === 429 ? " Wait for the cooldown before retrying." : ""}` : e?.message ?? "The streak test failed.";
+    } finally { streakTestBusy = false; notify(); }
+}
+
+function ExperimentalStreakTest({ game, active }: { game?: CatalogGame; active: boolean; }) {
+    const [requested, setRequested] = React.useState("99");
+    const [now, setNow] = React.useState(Date.now);
+    React.useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
+    const cooldown = Math.max(0, Math.ceil((streakTestNextAt - now) / 1000));
+    return <details style={{ padding: 12, border: "1px solid var(--background-modifier-accent, #48494e)", borderRadius: 6 }}>
+        <summary style={{ cursor: "pointer" }}>Experimental shared streak test</summary>
+        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+            <p>Creates a brief recorded session for the first selected game and compares Discord's history before and after. Discord ignored the requested number in our previous test.</p>
+            <p>Game: {game?.name ?? "Load the catalog and select a game."}</p>
+            <label style={{ display: "grid", gap: 6 }}>Requested streak (days)
+                <input type="number" min={1} max={1000000} step={1} style={fieldStyle} value={requested} disabled={streakTestBusy} onChange={e => setRequested(e.currentTarget.value)} />
+            </label>
+            <button type="button" style={buttonStyle} disabled={!enabled || !game || active || streakTestBusy || cooldown > 0} onClick={() => game && void testSharedStreak(game, Number(requested))}>
+                {streakTestBusy ? "Testing…" : cooldown > 0 ? `Retry in ${cooldown}s` : "Run shared streak test"}
+            </button>
+            {active && <p>Stop the running session before testing.</p>}
+            {streakTestResult && <p role="status" style={{ overflowWrap: "anywhere" }}>{streakTestResult}</p>}
+        </div>
+    </details>;
+}
 const badgeReader = new BadgeProgressReader({
     getAccountId: () => enabled ? UserStore.getCurrentUser()?.id : undefined,
     get: url => RestAPI.get({ url, retries: 0 }),
@@ -297,10 +355,11 @@ function Panel() {
             </div>
             <p style={{ color: "var(--text-muted, #b5bac1)" }}>The default 30 minutes is a rotation setting, not a verified badge requirement. One selected game stays active until stopped.</p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                <button style={{ ...buttonStyle, background: "#5865f2", color: "white" }} disabled={!enabled || !session || active || !games.length || !selected.length} onClick={begin}>Start session</button>
+                <button style={{ ...buttonStyle, background: "#5865f2", color: "white" }} disabled={!enabled || !session || active || streakTestBusy || !games.length || !selected.length} onClick={begin}>Start session</button>
                 <button style={buttonStyle} disabled={!active || (state?.total ?? 0) < 2} onClick={() => session?.next()}>Next game</button>
                 <button style={buttonStyle} disabled={!active} onClick={() => session?.stop()}>Stop session</button>
             </div>
+            <ExperimentalStreakTest game={games.find(game => game.id === selected[0])} active={active} />
             <p style={{ color: "var(--text-muted, #b5bac1)" }}>Stops on logout, disconnect, plugin disable, or a long sleep/suspension. Starting again is always manual. Check your actual badge counters in your Discord profile.</p>
         </section>
     );
@@ -344,13 +403,13 @@ export default definePlugin({
         } catch (err) { initError = err instanceof Error ? err.message : "Discord compatibility check failed."; }
         notify();
     },
-    stop() { enabled = false; badgeReader.reset(); closeModal(gameMenuKey); session?.stop("Plugin disabled. Normal game detection restored."); notify(); },
+    stop() { enabled = false; badgeReader.reset(); resetStreakTest(); closeModal(gameMenuKey); session?.stop("Plugin disabled. Normal game detection restored."); notify(); },
     flux: {
         ACTIVITY_UPDATE_START({ applicationId }: { applicationId: string; }) { session?.activityUpdate(applicationId, "pending"); },
         ACTIVITY_UPDATE_SUCCESS({ applicationId }: { applicationId: string; }) { session?.activityUpdate(applicationId, "accepted"); },
         ACTIVITY_UPDATE_FAIL({ applicationId }: { applicationId: string; }) { session?.activityUpdate(applicationId, "failed"); },
-        LOGOUT() { badgeReader.reset(); session?.stop("Signed out. Session stopped."); },
-        CONNECTION_CLOSED() { badgeReader.reset(); session?.stop("Disconnected. Start a new session after reconnecting."); }
+        LOGOUT() { badgeReader.reset(); resetStreakTest(); session?.stop("Signed out. Session stopped."); },
+        CONNECTION_CLOSED() { badgeReader.reset(); resetStreakTest(); session?.stop("Disconnected. Start a new session after reconnecting."); }
     },
     toolboxActions: { "Open game activity menu": openGameMenu, "Stop game activity spoofing": () => session?.stop() }
 });
